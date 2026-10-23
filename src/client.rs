@@ -3836,16 +3836,20 @@ impl LoginConfigHandler {
         } else {
             Bytes::new()
         };
-        let os_login: MessageField<OSLogin> = if self.conn_type == ConnType::TERMINAL {
-            Some(OSLogin {
-                username: os_username,
-                password: os_password,
-                ..Default::default()
-            })
-            .into()
-        } else {
-            Default::default()
-        };
+        // Carry OS/domain credentials for terminal sessions, and for any other
+        // session type when the UI supplied them (e.g. the domain user/password
+        // required by the `require-ad-group` restriction on the remote side).
+        let os_login: MessageField<OSLogin> =
+            if self.conn_type == ConnType::TERMINAL || !os_username.is_empty() {
+                Some(OSLogin {
+                    username: os_username,
+                    password: os_password,
+                    ..Default::default()
+                })
+                .into()
+            } else {
+                Default::default()
+            };
         let mut lr = LoginRequest {
             username: pure_id,
             password: password.into(),

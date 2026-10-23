@@ -2837,6 +2837,77 @@ impl Connection {
         }
     }
 
+    // Enforce the optional Active Directory group restriction. When the
+    // `require-ad-group` option names a group (e.g. "CZARAGOZA\\GRP_SUPORTE_REMOTO"),
+    // the connecting technician must supply domain credentials (carried in
+    // `os_login`) that both authenticate against the directory and belong to
+    // that group. Returns true when access is allowed (feature disabled, or
+    // validation passed), false after sending a login error.
+    //
+    // The restriction is a credential check, so it applies to every incoming
+    // session while the option is set, regardless of the approve mode.
+    #[cfg(windows)]
+    async fn check_ad_group(&mut self, lr: &LoginRequest) -> bool {
+        let group = Config::get_option(keys::OPTION_REQUIRE_AD_GROUP)
+            .trim()
+            .to_owned();
+        if group.is_empty() {
+            return true;
+        }
+        let user = lr.os_login.username.trim().to_owned();
+        let pwd = lr.os_login.password.clone();
+        if user.is_empty() || pwd.is_empty() {
+            self.send_login_error("Domain user and password are required")
+                .await;
+            sleep(1.).await;
+            return false;
+        }
+        let g = group.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::platform::validate_user_in_group(&user, &pwd, &g)
+        })
+        .await;
+        match result {
+            Ok(Ok(true)) => true,
+            Ok(Ok(false)) => {
+                log::warn!("AD group check denied: user not in required group {}", group);
+                self.send_login_error(
+                    "Access denied: your account is not a member of the required group",
+                )
+                .await;
+                sleep(1.).await;
+                false
+            }
+            Ok(Err(e)) => {
+                log::warn!("AD group check failed: {}", e);
+                self.send_login_error("Domain authentication failed").await;
+                sleep(1.).await;
+                false
+            }
+            Err(e) => {
+                log::error!("AD group check task error: {}", e);
+                self.send_login_error("Domain authentication error").await;
+                sleep(1.).await;
+                false
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    async fn check_ad_group(&mut self, lr: &LoginRequest) -> bool {
+        let group = Config::get_option(keys::OPTION_REQUIRE_AD_GROUP)
+            .trim()
+            .to_owned();
+        if group.is_empty() {
+            return true;
+        }
+        let _ = lr;
+        self.send_login_error("AD group restriction is only supported on Windows")
+            .await;
+        sleep(1.).await;
+        false
+    }
+
     async fn handle_login_request_without_validation(&mut self, lr: &LoginRequest) {
         self.lr = lr.clone();
         self.peer_argb = crate::str2color(&format!("{}{}", &lr.my_id, &lr.my_platform), 0xff);
@@ -2917,6 +2988,9 @@ impl Connection {
             }
             self.reset_session_scope_for_login();
             if !self.check_id_whitelist().await {
+                return false;
+            }
+            if !self.check_ad_group(&lr).await {
                 return false;
             }
             match lr.union {

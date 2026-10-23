@@ -3006,6 +3006,107 @@ pub fn is_user_token_admin(user_token: HANDLE) -> ResultType<bool> {
     }
 }
 
+// Check whether the access token `user_token` is a member of `group`.
+// Each group SID on the token is resolved to "DOMAIN\\name" via LookupAccountSidW
+// and compared, case-insensitively, against `group` both as the full
+// "DOMAIN\\name" form and as the bare group name.
+pub fn is_user_token_in_group(user_token: HANDLE, group: &str) -> ResultType<bool> {
+    if user_token.is_null() || user_token == INVALID_HANDLE_VALUE {
+        bail!("Invalid user token provided");
+    }
+    let want = group.trim();
+    if want.is_empty() {
+        bail!("Empty group name");
+    }
+    let want_bare = want.rsplit('\\').next().unwrap_or(want);
+    unsafe {
+        let mut dw_size: DWORD = 0;
+        GetTokenInformation(user_token, TokenGroups, std::ptr::null_mut(), 0, &mut dw_size);
+        let last_error = GetLastError();
+        if last_error != ERROR_INSUFFICIENT_BUFFER {
+            bail!("Failed to get token groups buffer size, error: {}", last_error);
+        }
+        if dw_size == 0 {
+            bail!("Token groups buffer size is zero");
+        }
+        let mut buffer = vec![0u8; dw_size as usize];
+        if GetTokenInformation(
+            user_token,
+            TokenGroups,
+            buffer.as_mut_ptr() as *mut _,
+            dw_size,
+            &mut dw_size,
+        ) == FALSE
+        {
+            bail!(
+                "Failed to get token groups information, error: {}",
+                io::Error::last_os_error()
+            );
+        }
+        let p_token_groups = buffer.as_ptr() as *const TOKEN_GROUPS;
+        let group_count = (*p_token_groups).GroupCount;
+        if group_count == 0 {
+            return Ok(false);
+        }
+        let groups =
+            std::slice::from_raw_parts((*p_token_groups).Groups.as_ptr(), group_count as usize);
+        for g in groups {
+            if g.Sid.is_null() {
+                continue;
+            }
+            let mut name_len: DWORD = 0;
+            let mut domain_len: DWORD = 0;
+            let mut sid_type: winapi::um::winnt::SID_NAME_USE = 0;
+            // First call sizes the name and domain buffers.
+            LookupAccountSidW(
+                std::ptr::null(),
+                g.Sid,
+                std::ptr::null_mut(),
+                &mut name_len,
+                std::ptr::null_mut(),
+                &mut domain_len,
+                &mut sid_type,
+            );
+            if name_len == 0 {
+                continue;
+            }
+            let mut name_buf = vec![0u16; name_len as usize];
+            let mut domain_buf = vec![0u16; domain_len.max(1) as usize];
+            if LookupAccountSidW(
+                std::ptr::null(),
+                g.Sid,
+                name_buf.as_mut_ptr(),
+                &mut name_len,
+                domain_buf.as_mut_ptr(),
+                &mut domain_len,
+                &mut sid_type,
+            ) == FALSE
+            {
+                continue;
+            }
+            let name = String::from_utf16_lossy(&name_buf[..name_len as usize]);
+            let domain = String::from_utf16_lossy(&domain_buf[..domain_len as usize]);
+            let full = format!("{}\\{}", domain, name);
+            if full.eq_ignore_ascii_case(want) || name.eq_ignore_ascii_case(want_bare) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+// Validate domain credentials `user`/`pwd` against the directory (LogonUser)
+// and confirm the account is a member of `group`. Returns Ok(true) only when
+// both the logon succeeds and the group membership is present.
+pub fn validate_user_in_group(user: &str, pwd: &str, group: &str) -> ResultType<bool> {
+    let token = get_logon_user_token(user, pwd)?;
+    let res = is_user_token_in_group(token, group);
+    unsafe {
+        CloseHandle(token);
+    }
+    res
+}
+
 pub fn create_process_with_logon(user: &str, pwd: &str, exe: &str, arg: &str) -> ResultType<()> {
     let last_error_table = HashMap::from([
         (

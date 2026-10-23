@@ -139,6 +139,7 @@ pub const OPTION_DEFAULT_CONNECT_PASSWORD: &str = "default-connect-password";
 pub const OPTION_HIDE_TRAY: &str = "hide-tray";
 pub const OPTION_ONE_WAY_CLIPBOARD_REDIRECTION: &str = "one-way-clipboard-redirection";
 pub const OPTION_ALLOW_LOGON_SCREEN_PASSWORD: &str = "allow-logon-screen-password";
+pub const OPTION_REQUIRE_AD_GROUP: &str = "require-ad-group";
 pub const OPTION_ALLOW_DEEP_LINK_PASSWORD: &str = "allow-deep-link-password";
 pub const OPTION_ALLOW_DEEP_LINK_SERVER_SETTINGS: &str = "allow-deep-link-server-settings";
 pub const OPTION_ONE_WAY_FILE_TRANSFER: &str = "one-way-file-transfer";
@@ -302,6 +303,7 @@ pub const KEYS_SETTINGS: &[&str] = &[
     OPTION_ALLOW_ALWAYS_SOFTWARE_RENDER,
     OPTION_ENABLE_HWCODEC,
     OPTION_APPROVE_MODE,
+    OPTION_REQUIRE_AD_GROUP,
     OPTION_VERIFICATION_METHOD,
     OPTION_TEMPORARY_PASSWORD_LENGTH,
     OPTION_PROXY_URL,
